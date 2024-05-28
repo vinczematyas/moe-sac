@@ -1,0 +1,6 @@
+logs/
+models/
+wandb/
+*.pdf
+__pycache__/
+configs/__pycache__/
