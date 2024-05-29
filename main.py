@@ -5,11 +5,14 @@ import pickle
 import numpy as np
 import gymnasium as gym
 import matplotlib.pyplot as plt
-from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.manifold import TSNE
+from sklearn.tree import DecisionTreeClassifier
 from safetensors.torch import save_model, load_model
 from tqdm import trange
 import logging
 import os
+import dtreeviz
+import pandas as pd
 
 from configs.utils import init_cfg
 from sac import train_sac, setup_sac
@@ -27,7 +30,7 @@ def save_models(agent, tree, path):
     path: str
         Path to save the models
     """
-
+    os.makedirs(path, exist_ok=True)
     save_model(agent.actor, f"{path}/actor.safetensors")
     save_model(agent.qf1, f"{path}/qf1.safetensors")
     save_model(agent.qf2, f"{path}/qf2.safetensors")
@@ -53,7 +56,7 @@ def load_models(agent, path):
     tree: sklearn.tree.DecisionTreeClassifier
         Loaded decision tree
     """
-
+    assert os.path.exists(path), f"Path {path} does not exist"
     load_model(agent.actor, f"{path}/actor.safetensors")
     load_model(agent.qf1, f"{path}/qf1.safetensors")
     load_model(agent.qf2, f"{path}/qf2.safetensors")
@@ -85,18 +88,19 @@ def eval_agent(agent, envs, tree=None, n_eval_episodes=10):
     episode_rewards = []
 
     while len(episode_rewards) < n_eval_episodes:
+        obs = torch.Tensor(obs).to(cfg.device)
         if tree:
             # infer tree to get expert idx
             leaf_idxs = int(tree.predict(obs)[0])
-            expert_mean, expert_log_std = agent.actor.experts[leaf_idxs]
+            mean_expert, log_std_expert = agent.actor.mean_experts[leaf_idxs], agent.actor.log_std_experts[leaf_idxs]
             # infer the expert to get mean and log_std
-            mean, log_std = expert_mean(torch.Tensor(obs).to(cfg.device)), expert_log_std(torch.Tensor(obs).to(cfg.device))
+            mean, log_std = mean_expert(obs), log_std_expert(obs)
             log_std = torch.tanh(log_std)
             log_std = agent.actor.LOG_STD_MIN + 0.5 * (agent.actor.LOG_STD_MAX - agent.actor.LOG_STD_MIN) * (log_std + 1)
             # get action using mean and log_std
-            actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device), mean, log_std, training=False)
+            actions = agent.actor.get_action(obs, mean, log_std, training=False)
         else:
-            actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device), training=False)
+            actions = agent.actor.get_action(obs, training=False)
         actions = actions[0].cpu().detach().numpy()
 
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
@@ -173,7 +177,7 @@ def train_sac_agent(cfg, agent, envs):
         train_sac(cfg, agent)
 
 
-def create_routing_dataset(agent, n_samples):
+def create_routing_dataset(agent, envs, n_samples, rb_available=True, tree=None):
     """Create a dataset for observation - routing network mapping
 
     Attributes
@@ -195,15 +199,22 @@ def create_routing_dataset(agent, n_samples):
     idx_data = torch.Tensor()
     while obs_data.shape[0] < n_samples:
         curr_n_samples = min(250, n_samples - obs_data.shape[0])
-        data = agent.rb.sample(curr_n_samples)
-        obs = data.observations
-        leaf_idxs = agent.actor.gate(obs)[1]
+        if rb_available:
+            data = agent.rb.sample(curr_n_samples)
+            obs = data.observations
+        else:
+            obs = torch.cat([torch.Tensor(envs.observation_space.sample()) for _ in range(curr_n_samples)], dim=0)
+        obs = obs.float()
+        if tree:
+            leaf_idxs = torch.Tensor(tree.predict(obs))
+        else:
+            leaf_idxs = agent.actor.gate(obs)[1]
         obs_data = torch.cat((obs_data, obs), dim=0)
         idx_data = torch.cat((idx_data, leaf_idxs), dim=0)
     return obs_data, idx_data
 
 
-def main(cfg, run_path):
+def main(cfg):
     n_envs = 1  # for now, we only support single env training
     envs = gym.vector.SyncVectorEnv(
         [lambda: gym.wrappers.RecordEpisodeStatistics(gym.make(cfg.env_id,)) for _ in range(n_envs)]
@@ -212,9 +223,10 @@ def main(cfg, run_path):
     agent = setup_sac(cfg, envs)
     train_sac_agent(cfg, agent, envs)
 
-    print(f"Training done creating dataset for DT training")
-    X, y = create_routing_dataset(agent, n_samples=cfg.dt.n_ds_samples)
-    dt = DecisionTreeClassifier(max_depth=3)
+    print(f"Creating dataset for DT training")
+    X, y = create_routing_dataset(agent, envs, n_samples=cfg.dt.n_ds_samples)
+
+    dt = DecisionTreeClassifier(max_depth=cfg.dt.max_depth)
 
     print(f"Fitting decision tree on {min(cfg.total_timesteps+10000, cfg.dt.n_ds_samples)} samples")
     dt.fit(X, y)
@@ -224,20 +236,13 @@ def main(cfg, run_path):
     print(eval_agent(agent, envs))
     print(f"Evaluation on 10 episodes w. tree")
     print(eval_agent(agent, envs, tree=dt))
+    
+    if cfg.log.save_models:
+        save_models(agent, dt, f"{cfg.run_path}/models")
+        agent, dt = load_models(agent, f"{cfg.run_path}/models")
 
-    plot_tree(
-        dt,
-        filled=True, 
-        feature_names=[f"obs_{i}" for i in range(X.shape[1])], 
-        class_names=[f"expert_{i}" for i in range(cfg.sac.n_experts)]
-    )
-    plt.savefig('learned_tree.pdf')
-
-    save_models(agent, dt, f"{cfg.log.model_dir}/{run_path}")
-    agent, dt = load_models(agent, f"{cfg.log.model_dir}/{run_path}")
-
-    print(f"Evaluation on 10 episodes w. tree after re-loading")
-    print(eval_agent(agent, envs, tree=dt))
+        print(f"Evaluation on 10 episodes w. tree after re-loading")
+        print(eval_agent(agent, envs, tree=dt))
 
 
 if __name__ == "__main__":
@@ -263,24 +268,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = init_cfg(f"configs/{args.config}")
-    run_path=f"{args.config.split('.')[0]}/{args.run_name}_{time.strftime('%m%d_%H%M')}"
+    cfg.update(**vars(args))
+    cfg.log.update(**vars(args))
+    cfg.sac.update(**vars(args))
+    cfg.dt.update(**vars(args))
 
-    args = vars(args)
-    cfg.update(args)
-    cfg.log.update(args)
-    cfg.sac.update(args)
-    cfg.dt.update(args)
+    run_path = f"{args.config.split('.')[0]}/{args.run_name}_{time.strftime('%m%d_%H%M')}"
+    cfg.run_path = "runs/" + run_path 
+    os.makedirs(cfg.run_path, exist_ok=True)
+
+    cfg.to_yaml(f"{cfg.run_path}/config.yml")
 
     if cfg.log.log_local:
-        os.makedirs(f"{cfg.log.log_dir}/{os.path.join("", *run_path.split('/')[:-1])}", exist_ok=True)
         logging.basicConfig(
-            filename=f"{cfg.log.log_dir}/{run_path}.log", 
+            filename=f"{cfg.run_path}/log.log", 
             level=logging.INFO, format="%(message)s"
         )
     if cfg.log.wandb:
-        wandb.init(project="moe-sac", name=args["run_name"])
-    if cfg.log.save_models:
-        os.makedirs(f"{cfg.log.model_dir}/{run_path}", exist_ok=True)
+        wandb.init(project="moe-sac", name=run_path)
 
-    main(cfg, run_path)
+    main(cfg)
 

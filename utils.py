@@ -18,13 +18,11 @@ class MLP(nn.Module):
 
 
 class TopkRouter(nn.Module):
-    def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
+    def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = [32,]):
         super(TopkRouter, self).__init__()
         self.fc = MLP(input_dim, router_hidden_dims, n_experts)
         self.fc_noise = MLP(input_dim, router_hidden_dims, n_experts)
         self.topk = topk
-
-        # TODO: add noise to the logits using another MLP (https://github.com/davidmrau/mixture-of-experts)
 
     def forward(self, x, training=False):
         """Infers the top-k experts for the input x.
@@ -44,7 +42,7 @@ class TopkRouter(nn.Module):
         if training:
             noise_logits = self.fc_noise(x)
             noise = torch.randn_like(logits) + F.softplus(self.fc_noise(x))
-            logits += noise  # load balancing w. noise  ISSUE: ruins performance
+            logits += noise  # load balancing w. noise
         topk_logits, topk_indices = torch.topk(logits, self.topk, dim=-1)
         zeros = torch.full_like(logits, fill_value=float('-inf'))
         sparse_logits = zeros.scatter_(index=topk_indices, src=topk_logits, dim=-1)

@@ -3,6 +3,7 @@ seed: 420
 env_id: Walker2d-v4
 device: cpu
 total_timesteps: 1_000_000
+run_path: ""
 # logging args
 log:
   wandb: False
