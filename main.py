@@ -14,8 +14,8 @@ import os
 import dtreeviz
 import pandas as pd
 
-from configs.utils import init_cfg
 from sac import train_sac, setup_sac
+from utils import init_cfg
 
 
 def save_models(agent, tree, path):
