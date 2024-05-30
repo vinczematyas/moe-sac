@@ -13,7 +13,7 @@ log:
   model_dir: models
 # sac args
 sac:
-  n_experts: 1
+  n_experts: 3
   q_depth: 2
   topk: 1
   policy_lr: 0.0003
