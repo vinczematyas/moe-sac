@@ -20,7 +20,7 @@ class MLP(nn.Module):
 
 
 class TopkRouter(nn.Module):
-    def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = [32,]):
+    def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
         super(TopkRouter, self).__init__()
         self.fc = MLP(input_dim, router_hidden_dims, n_experts)
         self.fc_noise = MLP(input_dim, router_hidden_dims, n_experts)
