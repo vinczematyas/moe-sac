@@ -7,6 +7,7 @@ from collections import namedtuple
 from stable_baselines3.common.buffers import ReplayBuffer
 import math
 from tqdm import trange
+from typing import List
 
 
 class MLP(nn.Module):
@@ -27,10 +28,11 @@ class TopkRouter(nn.Module):
     def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
         super(TopkRouter, self).__init__()
         self.fc = MLP(input_dim, router_hidden_dims, n_experts)
-        self.fc_noise = MLP(input_dim, router_hidden_dims, n_experts)
+        self.capacity = int(1000 // n_experts)
+        self.load = torch.zeros(n_experts)
         self.topk = topk
 
-    def forward(self, x, training=False):
+    def forward(self, x, steps_done, training=False):
         """Infers the top-k experts for the input x.
 
         Take topk experts with the highest logits
@@ -45,11 +47,10 @@ class TopkRouter(nn.Module):
             The indices of the top-k experts
         """
         logits = self.fc(x)
-        if training:
-            noise_logits = self.fc_noise(x)
-            noise = torch.randn_like(logits) + F.softplus(self.fc_noise(x))
-            logits += noise  # load balancing w. noise
         topk_logits, topk_indices = torch.topk(logits, self.topk, dim=-1)
+        if training:  # noise injection for load balancing
+            self.load[topk_indices] += 1
+            logits[:, topk_indices] = max(topk_logits - self.load[topk_indices] / 1000, 0)
         zeros = torch.full_like(logits, fill_value=float('-inf'))
         sparse_logits = zeros.scatter_(index=topk_indices, src=topk_logits, dim=-1)
         return F.softmax(sparse_logits, dim=-1), topk_indices
@@ -77,16 +78,16 @@ class Actor(nn.Module):
         self.LOG_STD_MAX = 2
         self.LOG_STD_MIN = -5
 
-    def forward(self, x, training=True):
+    def forward(self, x, steps_done, training=True):
         x = x.float()
         # initialize mean and log_std
-        mean = torch.zeros(x.size(0), self.action_shape)
-        log_std = torch.zeros(x.size(0), self.action_shape)
+        mean = torch.zeros(x.size(0), self.action_shape).to(x.device)
+        log_std = torch.zeros(x.size(0), self.action_shape).to(x.device)
 
         flat_x = x.view(-1, x.size(-1))
 
         # infer gating network
-        gating_output, gating_indices = self.gate(x, training)
+        gating_output, gating_indices = self.gate(x, steps_done, training)
         flat_gating_output = gating_output.view(-1, gating_output.shape[-1])
 
         for i in range(self.cfg.n_experts):
@@ -115,9 +116,9 @@ class Actor(nn.Module):
         log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)
         return mean, log_std
 
-    def get_action(self, x, mean=None, log_std=None, training=True):
-        if mean is None and log_std is None:  # not given by tree
-            mean, log_std = self(x, training)
+    def get_action(self, x, mean=None, log_std=None, steps_done = 0, training=True):
+        if mean == None and log_std == None:
+            mean, log_std = self(x, steps_done, training)
         std = log_std.exp()
         x_t = torch.randn_like(mean) * std + mean  # for reparameterization trick (mean + std * N(0,1))
         y_t = torch.tanh(x_t)
@@ -153,7 +154,7 @@ class SoftQNetwork(nn.Module):
 SACComponents = namedtuple("SACComponents", ["actor", "qf1", "qf2", "qf1_target", "qf2_target", "q_optimizer", "actor_optimizer", "rb", "target_entropy", "log_alpha", "a_optimizer", "counter"])
 
 def setup_sac(cfg, env):
-    actor = Actor(cfg, env).to(cfg.device)  # Linear actor
+    actor = Actor(cfg, env).to(cfg.device)
     qf1 = SoftQNetwork(cfg, env).to(cfg.device)
     qf2 = SoftQNetwork(cfg, env).to(cfg.device)
     qf1_target = SoftQNetwork(cfg, env).to(cfg.device)
@@ -193,7 +194,7 @@ def train_sac(cfg, sac):
 
     data = sac.rb.sample(cfg.sac.batch_size)
     with torch.no_grad():
-        next_state_actions, next_state_log_pi, _ = sac.actor.get_action(data.next_observations)
+        next_state_actions, next_state_log_pi, _ = sac.actor.get_action(data.next_observations, training=False)
         qf1_next_target = sac.qf1_target(data.next_observations, next_state_actions)
         qf2_next_target = sac.qf2_target(data.next_observations, next_state_actions)
         min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
@@ -212,7 +213,7 @@ def train_sac(cfg, sac):
 
     if sac.counter['n_steps'] % cfg.sac.policy_frequency == 0:  # TD 3 Delayed update support
         for _ in range(cfg.sac.policy_frequency):  # compensate for the delay in policy updates
-            pi, log_pi, _ = sac.actor.get_action(data.observations)
+            pi, log_pi, _ = sac.actor.get_action(data.observations, training=False)
             qf1_pi = sac.qf1(data.observations, pi)
             qf2_pi = sac.qf2(data.observations, pi)
             min_qf_pi = torch.min(qf1_pi, qf2_pi)
@@ -224,7 +225,7 @@ def train_sac(cfg, sac):
 
             if cfg.sac.alpha_auto == True:
                 with torch.no_grad():
-                    _, log_pi, _ = sac.actor.get_action(data.observations)
+                    _, log_pi, _ = sac.actor.get_action(data.observations, training=False)
                 alpha_loss = (-sac.log_alpha.exp() * (log_pi + sac.target_entropy)).mean()
 
                 sac.a_optimizer.zero_grad()

@@ -7,28 +7,28 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn.tree import DecisionTreeClassifier
-from safetensors.torch import save_model, load_model
+from safetensors.torch import save_model, load_model, save_file, safe_open
 from tqdm import trange
 import logging
 import os
 import dtreeviz
 import pandas as pd
+import pyarrow.parquet as pq
+import pyarrow as pa
 
 from sac import train_sac, setup_sac
 from utils import init_cfg
 
 
-def save_models(agent, tree, path):
-    """Save the agent and tree models
+def save_sac(path, agent):
+    """Save the agent and observations
 
     Attributes
     ----------
-    agent: torch.nn.Module
-        Agent to save
-    tree: sklearn.tree.DecisionTreeClassifier
-        Decision tree to save
     path: str
         Path to save the models
+    agent: torch.nn.Module
+        Agent to save
     """
     os.makedirs(path, exist_ok=True)
     save_model(agent.actor, f"{path}/actor.safetensors")
@@ -36,11 +36,11 @@ def save_models(agent, tree, path):
     save_model(agent.qf2, f"{path}/qf2.safetensors")
     save_model(agent.qf1_target, f"{path}/qf1_target.safetensors")
     save_model(agent.qf2_target, f"{path}/qf2_target.safetensors")
-    pickle.dump(tree, open(f"{path}/tree.pkl", "wb"))
+    np.savez_compressed(f"{path}/observations.npz", array=agent.rb.observations)
 
 
-def load_models(agent, path):
-    """Load the agent and tree models
+def load_sac(agent, path):
+    """Load the agent and observations
 
     Attributes
     ----------
@@ -53,8 +53,8 @@ def load_models(agent, path):
     -------
     agent: torch.nn.Module
         Loaded agent
-    tree: sklearn.tree.DecisionTreeClassifier
-        Loaded decision tree
+    obs: np.ndarray
+        Loaded observations
     """
     assert os.path.exists(path), f"Path {path} does not exist"
     load_model(agent.actor, f"{path}/actor.safetensors")
@@ -62,8 +62,8 @@ def load_models(agent, path):
     load_model(agent.qf2, f"{path}/qf2.safetensors")
     load_model(agent.qf1_target, f"{path}/qf1_target.safetensors")
     load_model(agent.qf2_target, f"{path}/qf2_target.safetensors")
-    tree = pickle.load(open(f"{path}/tree.pkl", "rb"))
-    return agent, tree
+    obs = np.load(f"{path}/observations.npz")["array"]  
+    return agent, obs
 
 
 def eval_agent(agent, envs, tree=None, n_eval_episodes=10):
@@ -149,13 +149,14 @@ def train_sac_agent(cfg, agent, envs):
     obs, _ = envs.reset()
     generator = trange(cfg.total_timesteps, desc="Training")
     for global_step in generator:
-        actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device))
+        actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device), steps_done=global_step, training=True)
         actions = actions[0].cpu().detach().numpy()
 
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
         if "final_info" in infos:
             for info in infos["final_info"]:
+                agent.actor.gate.capacity = torch.zeros(cfg.sac.n_experts)
                 if cfg.log.wandb:
                     wandb.log({
                     "global_step": global_step,
@@ -176,14 +177,19 @@ def train_sac_agent(cfg, agent, envs):
 
         train_sac(cfg, agent)
 
+        if cfg.log.save_models and (global_step+1) % int(1e6) == 0:
+            save_sac(f"{cfg.run_path}/models/checkpoint_{str(global_step)[:-4]}k", agent)
 
-def create_routing_dataset(agent, envs, n_samples, rb_available=True, tree=None):
+
+def create_routing_dataset(agent, obs, n_samples, tree=None):
     """Create a dataset for observation - routing network mapping
 
     Attributes
     ----------
     agent: torch.nn.Module
         Agent used to collect data
+    obs: np.ndarray
+        Observations
     n_samples: int
         Number of samples to collect
 
@@ -199,11 +205,7 @@ def create_routing_dataset(agent, envs, n_samples, rb_available=True, tree=None)
     idx_data = torch.Tensor()
     while obs_data.shape[0] < n_samples:
         curr_n_samples = min(250, n_samples - obs_data.shape[0])
-        if rb_available:
-            data = agent.rb.sample(curr_n_samples)
-            obs = data.observations
-        else:
-            obs = torch.cat([torch.Tensor(envs.observation_space.sample()) for _ in range(curr_n_samples)], dim=0)
+        curr_obs = obs[obs_data.shape[0]:obs_data.shape[0]+curr_n_samples]
         obs = obs.float()
         if tree:
             leaf_idxs = torch.Tensor(tree.predict(obs))
@@ -223,26 +225,8 @@ def main(cfg):
     agent = setup_sac(cfg, envs)
     train_sac_agent(cfg, agent, envs)
 
-    print(f"Creating dataset for DT training")
-    X, y = create_routing_dataset(agent, envs, n_samples=cfg.dt.n_ds_samples)
-
-    dt = DecisionTreeClassifier(max_depth=cfg.dt.max_depth)
-
-    print(f"Fitting decision tree on {min(cfg.total_timesteps+10000, cfg.dt.n_ds_samples)} samples")
-    dt.fit(X, y)
-
-    # evaluate the agent
-    print(f"Evaluating on 10 episodes")
-    print(eval_agent(agent, envs))
-    print(f"Evaluation on 10 episodes w. tree")
-    print(eval_agent(agent, envs, tree=dt))
-    
     if cfg.log.save_models:
-        save_models(agent, dt, f"{cfg.run_path}/models")
-        agent, dt = load_models(agent, f"{cfg.run_path}/models")
-
-        print(f"Evaluation on 10 episodes w. tree after re-loading")
-        print(eval_agent(agent, envs, tree=dt))
+        save_sac(f"{cfg.run_path}/models/checkpoint_final", agent)
 
 
 if __name__ == "__main__":

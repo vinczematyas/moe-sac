@@ -9,8 +9,6 @@ log:
   wandb: False
   log_local: False
   save_models: False
-  log_dir: logs
-  model_dir: models
 # sac args
 sac:
   n_experts: 6
