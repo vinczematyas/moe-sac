@@ -206,12 +206,12 @@ def create_routing_dataset(agent, obs, n_samples, tree=None):
     while obs_data.shape[0] < n_samples:
         curr_n_samples = min(250, n_samples - obs_data.shape[0])
         curr_obs = obs[obs_data.shape[0]:obs_data.shape[0]+curr_n_samples]
-        obs = obs.float()
+        curr_obs = torch.Tensor(curr_obs)
         if tree:
-            leaf_idxs = torch.Tensor(tree.predict(obs))
+            leaf_idxs = torch.Tensor(tree.predict(curr_obs))
         else:
-            leaf_idxs = agent.actor.gate(obs)[1]
-        obs_data = torch.cat((obs_data, obs), dim=0)
+            leaf_idxs = agent.actor.gate(curr_obs, steps_done=int(1e10), training=False)[1]
+        obs_data = torch.cat((obs_data, curr_obs), dim=0)
         idx_data = torch.cat((idx_data, leaf_idxs), dim=0)
     return obs_data, idx_data
 
