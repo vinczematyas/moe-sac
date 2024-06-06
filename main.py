@@ -250,9 +250,6 @@ if __name__ == "__main__":
     parser.add_argument("--topk", type=int)
     parser.add_argument("--q_depth", type=int)
     parser.add_argument("--router_hidden_dims", default=[], nargs="+", type=int)
-    # decsion tree args
-    parser.add_argument("--n_ds_samples", type=int)
-    parser.add_argument("--max_depth", type=int)
     args = parser.parse_args()
 
     cfg = init_cfg(f"configs/{args.config}")
@@ -260,7 +257,6 @@ if __name__ == "__main__":
     cfg.update(**vars(args))
     cfg.log.update(**vars(args))
     cfg.sac.update(**vars(args))
-    cfg.dt.update(**vars(args))
 
     run_path = f"{args.config.split('.')[0]}/{args.run_name}_{time.strftime('%m%d_%H%M')}"
     cfg.run_path = "runs/" + run_path 
