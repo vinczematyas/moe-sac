@@ -27,12 +27,19 @@ class MLP(nn.Module):
 class TopkRouter(nn.Module):
     def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
         super(TopkRouter, self).__init__()
-        self.fc = MLP(input_dim, router_hidden_dims, n_experts)
-        self.capacity = int(1000 // n_experts)
-        self.load = torch.zeros(n_experts)
+        self.n_experts = n_experts
         self.topk = topk
+        self.fc = MLP(input_dim, router_hidden_dims, n_experts)
+        self.noise = torch.distributions.Normal(
+            loc=torch.tensor([0.0]*n_experts), scale=torch.tensor([1.0/n_experts]*n_experts)
+        )
+        # load balancing
+        self.importance = torch.zeros(n_experts)
+        self.load = torch.zeros(n_experts)
 
-    def forward(self, x, steps_done, training=False):
+        print(self)
+
+    def forward(self, x, training):
         """Infers the top-k experts for the input x.
 
         Take topk experts with the highest logits
@@ -47,13 +54,23 @@ class TopkRouter(nn.Module):
             The indices of the top-k experts
         """
         logits = self.fc(x)
-        topk_logits, topk_indices = torch.topk(logits, self.topk, dim=-1)
-        if training:  # noise injection for load balancing
-            self.load[topk_indices] += 1
-            logits[:, topk_indices] = max(topk_logits - self.load[topk_indices] / 1000, 0)
-        zeros = torch.full_like(logits, fill_value=float('-inf'))
-        sparse_logits = zeros.scatter_(index=topk_indices, src=topk_logits, dim=-1)
-        return F.softmax(sparse_logits, dim=-1), topk_indices
+
+        if training:
+            noisy_logits = logits + self.noise.sample()
+
+            importance = F.softmax(noisy_logits, dim=-1).sum(0)
+            self.importance = (torch.std(importance)/torch.mean(importance))**2
+
+            threshold = torch.max(noisy_logits, dim=-1).values
+            load = (1 - self.noise.cdf(threshold.unsqueeze(1) - logits)).sum(0)
+            self.load = (torch.std(load)/torch.mean(load))**2
+        else:
+            noisy_logits = logits
+
+        noisy_logits = F.softmax(noisy_logits, dim=-1)
+        topk_logits, topk_indices = torch.topk(noisy_logits, self.topk, dim=-1)
+        sparse_logits = torch.zeros_like(logits).scatter_(index=topk_indices, src=topk_logits, dim=-1)
+        return sparse_logits, topk_indices
 
 
 class Actor(nn.Module):
@@ -65,7 +82,12 @@ class Actor(nn.Module):
 
         self.mean_experts = nn.ModuleList([nn.Linear(self.observation_shape, self.action_shape) for _ in range(self.cfg.n_experts)])
         self.log_std_experts = nn.ModuleList([nn.Linear(self.observation_shape, self.action_shape) for _ in range(self.cfg.n_experts)])
-        self.gate = TopkRouter(self.observation_shape, self.cfg.n_experts, topk=self.cfg.topk)
+        self.gate = TopkRouter(
+            input_dim=self.observation_shape, 
+            n_experts=self.cfg.n_experts, 
+            topk=self.cfg.topk, 
+            router_hidden_dims=cfg.sac.router_hidden_dims,
+        )
 
         # action scaling and bias
         action_space = env.single_action_space
@@ -78,7 +100,7 @@ class Actor(nn.Module):
         self.LOG_STD_MAX = 2
         self.LOG_STD_MIN = -5
 
-    def forward(self, x, steps_done, training=True):
+    def forward(self, x, training):
         x = x.float()
         # initialize mean and log_std
         mean = torch.zeros(x.size(0), self.action_shape).to(x.device)
@@ -87,7 +109,7 @@ class Actor(nn.Module):
         flat_x = x.view(-1, x.size(-1))
 
         # infer gating network
-        gating_output, gating_indices = self.gate(x, steps_done, training)
+        gating_output, gating_indices = self.gate(x, training)
         flat_gating_output = gating_output.view(-1, gating_output.shape[-1])
 
         for i in range(self.cfg.n_experts):
@@ -116,9 +138,9 @@ class Actor(nn.Module):
         log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)
         return mean, log_std
 
-    def get_action(self, x, mean=None, log_std=None, steps_done = 0, training=True):
+    def get_action(self, x, mean=None, log_std=None, training=False):
         if mean == None and log_std == None:
-            mean, log_std = self(x, steps_done, training)
+            mean, log_std = self(x, training)
         std = log_std.exp()
         x_t = torch.randn_like(mean) * std + mean  # for reparameterization trick (mean + std * N(0,1))
         y_t = torch.tanh(x_t)
@@ -194,7 +216,7 @@ def train_sac(cfg, sac):
 
     data = sac.rb.sample(cfg.sac.batch_size)
     with torch.no_grad():
-        next_state_actions, next_state_log_pi, _ = sac.actor.get_action(data.next_observations, training=False)
+        next_state_actions, next_state_log_pi, _ = sac.actor.get_action(data.next_observations)
         qf1_next_target = sac.qf1_target(data.next_observations, next_state_actions)
         qf2_next_target = sac.qf2_target(data.next_observations, next_state_actions)
         min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - alpha * next_state_log_pi
@@ -213,11 +235,14 @@ def train_sac(cfg, sac):
 
     if sac.counter['n_steps'] % cfg.sac.policy_frequency == 0:  # TD 3 Delayed update support
         for _ in range(cfg.sac.policy_frequency):  # compensate for the delay in policy updates
-            pi, log_pi, _ = sac.actor.get_action(data.observations, training=False)
+            pi, log_pi, _ = sac.actor.get_action(data.observations, training=True)
             qf1_pi = sac.qf1(data.observations, pi)
             qf2_pi = sac.qf2(data.observations, pi)
             min_qf_pi = torch.min(qf1_pi, qf2_pi)
             actor_loss = ((alpha * log_pi) - min_qf_pi).mean()
+
+            aux_loss = 0.5 * sac.actor.gate.importance + 0.5 * sac.actor.gate.load
+            actor_loss += 0.01 * aux_loss
 
             sac.actor_optimizer.zero_grad()
             actor_loss.backward()
@@ -225,7 +250,7 @@ def train_sac(cfg, sac):
 
             if cfg.sac.alpha_auto == True:
                 with torch.no_grad():
-                    _, log_pi, _ = sac.actor.get_action(data.observations, training=False)
+                    _, log_pi, _ = sac.actor.get_action(data.observations)
                 alpha_loss = (-sac.log_alpha.exp() * (log_pi + sac.target_entropy)).mean()
 
                 sac.a_optimizer.zero_grad()

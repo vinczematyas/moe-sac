@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
 from types import SimpleNamespace
+import numpy as np
+import random
 import yaml
 
 
@@ -47,3 +49,13 @@ def init_cfg(cfg_file):
     with open(cfg_file) as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
     return NestedDictToNamespace(**cfg)
+
+
+def fix_seed(seed, env):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+    env.action_space.seed(seed)
+    env.observation_space.seed(seed)

@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 
 from sac import train_sac, setup_sac
-from utils import init_cfg
+from utils import init_cfg, fix_seed
 
 
 def save_sac(path, agent):
@@ -66,7 +66,7 @@ def load_sac(agent, path):
     return agent, obs
 
 
-def eval_agent(agent, envs, tree=None, n_eval_episodes=10):
+def eval_agent(cfg, agent, envs, tree=None, n_eval_episodes=10):
     """Evaluate the agent in the environment
 
     Attributes
@@ -130,7 +130,7 @@ def train_sac_agent(cfg, agent, envs):
     """
 
     # fill RB with random data
-    obs, _ = envs.reset()
+    obs, _ = envs.reset(seed=cfg.seed)
     generator = trange(int(1e4), desc="Filling RB")
     for _ in generator:
         actions = envs.action_space.sample()
@@ -146,10 +146,10 @@ def train_sac_agent(cfg, agent, envs):
 
         obs = next_obs
 
-    obs, _ = envs.reset()
+    obs, _ = envs.reset(seed=cfg.seed+1)
     generator = trange(cfg.total_timesteps, desc="Training")
     for global_step in generator:
-        actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device), steps_done=global_step, training=True)
+        actions = agent.actor.get_action(torch.Tensor(obs).to(cfg.device))
         actions = actions[0].cpu().detach().numpy()
 
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
@@ -177,7 +177,7 @@ def train_sac_agent(cfg, agent, envs):
 
         train_sac(cfg, agent)
 
-        if cfg.log.save_models and (global_step+1) % int(1e6) == 0:
+        if cfg.log.save_models and (global_step+1) % int(1e5) == 0:
             save_sac(f"{cfg.run_path}/models/checkpoint_{str(global_step)[:-4]}k", agent)
 
 
@@ -210,7 +210,7 @@ def create_routing_dataset(agent, obs, n_samples, tree=None):
         if tree:
             leaf_idxs = torch.Tensor(tree.predict(curr_obs))
         else:
-            leaf_idxs = agent.actor.gate(curr_obs, steps_done=int(1e10), training=False)[1]
+            leaf_idxs = agent.actor.gate(curr_obs, training=False)[1]
         obs_data = torch.cat((obs_data, curr_obs), dim=0)
         idx_data = torch.cat((idx_data, leaf_idxs), dim=0)
     return obs_data, idx_data
@@ -221,6 +221,8 @@ def main(cfg):
     envs = gym.vector.SyncVectorEnv(
         [lambda: gym.wrappers.RecordEpisodeStatistics(gym.make(cfg.env_id,)) for _ in range(n_envs)]
     )
+
+    fix_seed(cfg.seed, envs)
 
     agent = setup_sac(cfg, envs)
     train_sac_agent(cfg, agent, envs)
@@ -238,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="hopper.yml")
     parser.add_argument("--device", type=str)
     parser.add_argument("--total_timesteps", type=int)
+    parser.add_argument("--seed", type=int)
     # logging args
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--log_local", action="store_true")
@@ -246,12 +249,14 @@ if __name__ == "__main__":
     parser.add_argument("--n_experts", type=int)
     parser.add_argument("--topk", type=int)
     parser.add_argument("--q_depth", type=int)
+    parser.add_argument("--router_hidden_dims", default=[], nargs="+", type=int)
     # decsion tree args
     parser.add_argument("--n_ds_samples", type=int)
     parser.add_argument("--max_depth", type=int)
     args = parser.parse_args()
 
     cfg = init_cfg(f"configs/{args.config}")
+
     cfg.update(**vars(args))
     cfg.log.update(**vars(args))
     cfg.sac.update(**vars(args))
