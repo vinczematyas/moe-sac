@@ -1,29 +1,21 @@
 import time
 import torch
 import wandb
-import pickle
 import numpy as np
 import gymnasium as gym
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-from sklearn.tree import DecisionTreeClassifier
-from safetensors.torch import save_model, load_model, save_file, safe_open
+from safetensors.torch import save_model, load_model
 from tqdm import trange
 import logging
 import os
-import dtreeviz
-import pandas as pd
-import pyarrow.parquet as pq
-import pyarrow as pa
 
 from sac import train_sac, setup_sac
 from utils import init_cfg, fix_seed
 
 
 def save_sac(path, agent):
-    """Save the agent and observations
+    """Save the agent and observations from the replay buffer
 
-    Attributes
+    Parameters
     ----------
     path: str
         Path to save the models
@@ -40,9 +32,9 @@ def save_sac(path, agent):
 
 
 def load_sac(agent, path):
-    """Load the agent and observations
+    """Load the agent and observations from the replay buffer
 
-    Attributes
+    Parameters
     ----------
     agent: torch.nn.Module
         Agent to load
@@ -67,66 +59,70 @@ def load_sac(agent, path):
 
 
 def eval_agent(cfg, agent, envs, tree=None, n_eval_episodes=10):
-    """Evaluate the agent in the environment
+    """Evaluate the agent
 
-    Attributes
+    Parameters
     ----------
+    cfg: class 'utils.NestedDictToNamespace'
+        Configuration
     agent: torch.nn.Module
         Agent to evaluate
     envs: gym.vector.SyncVectorEnv
         Environment used for evaluation
-    n_eval_episodes: int
-        Number of episodes to evaluate the agent
+    tree: DecisionTreeClassifier, optional
+        Tree used to infer the expert
+    n_eval_episodes: int, optional
+        Number of evaluation episodes
 
     Returns
     -------
     episode_rewards: list
-        List of rewards obtained in each episode
+        Rewards obtained in each evaluation episode
     """
 
     obs, _ = envs.reset()
     episode_rewards = []
+    agent.eval()
 
-    while len(episode_rewards) < n_eval_episodes:
-        obs = torch.Tensor(obs).to(cfg.device)
-        if tree:
-            # infer tree to get expert idx
-            leaf_idxs = int(tree.predict(obs)[0])
-            mean_expert, log_std_expert = agent.actor.mean_experts[leaf_idxs], agent.actor.log_std_experts[leaf_idxs]
-            # infer the expert to get mean and log_std
-            mean, log_std = mean_expert(obs), log_std_expert(obs)
-            log_std = torch.tanh(log_std)
-            log_std = agent.actor.LOG_STD_MIN + 0.5 * (agent.actor.LOG_STD_MAX - agent.actor.LOG_STD_MIN) * (log_std + 1)
-            # get action using mean and log_std
-            actions = agent.actor.get_action(obs, mean, log_std, training=False)
-        else:
-            actions = agent.actor.get_action(obs, training=False)
-        actions = actions[0].cpu().detach().numpy()
+    with torch.no_grad():
+        while len(episode_rewards) < n_eval_episodes:
+            obs = torch.Tensor(obs).to(cfg.device)
+            if tree:
+                # infer tree to get expert idx
+                leaf_idxs = int(tree.predict(obs)[0])
+                mean_expert, log_std_expert = agent.actor.mean_experts[leaf_idxs], agent.actor.log_std_experts[leaf_idxs]
+                # infer the expert to get mean and log_std
+                mean, log_std = mean_expert(obs), log_std_expert(obs)
+                log_std = torch.tanh(log_std)
+                log_std = agent.actor.LOG_STD_MIN + 0.5 * (agent.actor.LOG_STD_MAX - agent.actor.LOG_STD_MIN) * (log_std + 1)
+                # get action using mean and log_std
+                actions = agent.actor.get_action(obs, mean, log_std, training=False)
+            else:
+                actions = agent.actor.get_action(obs, training=False)
+            actions = actions[0].cpu().detach().numpy()
 
-        next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+            next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
-        if "final_info" in infos:
-            for info in infos["final_info"]:
-                episode_rewards.append(info["episode"]["r"][0])
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    episode_rewards.append(info["episode"]["r"][0])
 
-        obs = next_obs
+            obs = next_obs
 
     return episode_rewards
 
 
 def train_sac_agent(cfg, agent, envs):
-    """Train the agent in the environment
+    """Train the agent
 
-    Attributes
+    Parameters
     ----------
-    cfg: dataclasses.dataclass
-        Configuration dataclass
+    cfg: class 'utils.NestedDictToNamespace'
+        Configuration
     agent: torch.nn.Module
         Agent to train
     envs: gym.vector.SyncVectorEnv
         Environment used for training
-    n_train_steps: int
-        Number of training steps
     """
 
     # fill RB with random data
@@ -134,7 +130,6 @@ def train_sac_agent(cfg, agent, envs):
     generator = trange(int(1e4), desc="Filling RB")
     for _ in generator:
         actions = envs.action_space.sample()
-
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
         real_next_obs = next_obs.copy()
@@ -165,7 +160,8 @@ def train_sac_agent(cfg, agent, envs):
                 })
                 if cfg.log.log_local:
                     logging.info(f"{global_step}, {info['episode']['r'][0]}, {info['episode']['l'][0]}")
-                generator.set_postfix({f"return": round(info['episode']['r'][0], 3), "length": info['episode']['l'][0]})
+                generator.set_postfix({"return": round(info['episode']['r'][0], 3), "length": info['episode']['l'][0]})
+
         real_next_obs = next_obs.copy()
         for idx, trunc in enumerate(truncations):
             if trunc:
@@ -178,13 +174,13 @@ def train_sac_agent(cfg, agent, envs):
         train_sac(cfg, agent)
 
         if cfg.log.save_models and (global_step+1) % int(1e5) == 0:
-            save_sac(f"{cfg.run_path}/models/checkpoint_{str(global_step)[:-4]}k", agent)
+            save_sac(f"{cfg.run_path}/models/checkpoint_{str(global_step+1)[:-3]}k", agent)
 
 
 def create_routing_dataset(agent, obs, n_samples, tree=None):
     """Create a dataset for observation - routing network mapping
 
-    Attributes
+    Parameters
     ----------
     agent: torch.nn.Module
         Agent used to collect data
@@ -192,6 +188,8 @@ def create_routing_dataset(agent, obs, n_samples, tree=None):
         Observations
     n_samples: int
         Number of samples to collect
+    tree: DecisionTreeClassifier, optional
+        Tree used to infer the expert
 
     Returns
     -------
@@ -217,6 +215,14 @@ def create_routing_dataset(agent, obs, n_samples, tree=None):
 
 
 def main(cfg):
+    """Main function to train the agent
+
+    Parameters
+    ----------
+    cfg: class 'utils.NestedDictToNamespace'
+        Configuration
+    """
+
     n_envs = 1  # for now, we only support single env training
     envs = gym.vector.SyncVectorEnv(
         [lambda: gym.wrappers.RecordEpisodeStatistics(gym.make(cfg.env_id,)) for _ in range(n_envs)]

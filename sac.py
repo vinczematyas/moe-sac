@@ -5,13 +5,26 @@ import torch.optim as optim
 import numpy as np
 from collections import namedtuple
 from stable_baselines3.common.buffers import ReplayBuffer
-import math
-from tqdm import trange
 from typing import List
+import math
 
 
 class MLP(nn.Module):
+    """Simple MLP with ReLU activation"""
+
     def __init__(self, input_dim: int, hidden_dims: List[int], output_dim: int):
+        """Initialize the MLP
+
+        Parameters
+        ----------
+        input_dim: int
+            The dimension of the input
+        hidden_dims: List[int]
+            The dimensions of the hidden layers
+        output_dim: int
+            The dimension of the output
+        """
+
         super(MLP, self).__init__()
         self.fc_list = nn.ModuleList(
             [nn.Linear(in_dim, out_dim) for in_dim, out_dim in zip([input_dim] + hidden_dims, hidden_dims + [output_dim])]
@@ -25,7 +38,23 @@ class MLP(nn.Module):
 
 
 class TopkRouter(nn.Module):
+    """Top-k router for Sparse-MoE"""
+
     def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
+        """Initialize the Top-k router
+
+        Parameters
+        ----------
+        input_dim: int
+            The dimension of the input
+        n_experts: int
+            The number of experts
+        topk: int
+            The number of experts to select
+        router_hidden_dims: List[int]
+            The dimensions of the hidden layers
+        """
+
         super(TopkRouter, self).__init__()
         self.n_experts = n_experts
         self.topk = topk
@@ -40,19 +69,21 @@ class TopkRouter(nn.Module):
         print(self)
 
     def forward(self, x, training):
-        """Infers the top-k experts for the input x.
+        """Forward pass of the Top-k router
 
-        Take topk experts with the highest logits
-        Make the logits of the other experts to be -inf
-        Take softmax to get the routing probabilities
+        Softmax before top-k
+        Noise injection for exploration
+        Auxiliary loss calculation for load balancing
+        same as: https://proceedings.neurips.cc/paper/2021/file/48237d9f2dea8c74c2a72126cf63d933-Paper.pdf
 
-        Returns
-        -------
-        routing_probs: torch.Tensor
-            The routing probabilities of the experts
-        topk_idx: torch.Tensor
-            The indices of the top-k experts
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor
+        training: bool
+            Whether the model is training or not
         """
+
         logits = self.fc(x)
 
         if training:
