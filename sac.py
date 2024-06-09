@@ -173,12 +173,11 @@ class Actor(nn.Module):
         if mean == None and log_std == None:
             mean, log_std = self(x, training)
         std = log_std.exp()
-        x_t = torch.randn_like(mean) * std + mean  # for reparameterization trick (mean + std * N(0,1))
-        y_t = torch.tanh(x_t)
-        action = y_t * self.action_scale + self.action_bias
-        log_prob = -0.5 * ((x_t - mean) / std).pow(2) - std.log() - 0.5 * math.log(2 * math.pi)
-        # enforcing action bound
-        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
+        x_t = torch.randn_like(mean) * std + mean
+        y_t = torch.tanh(x_t)  # normalize action to [-1, 1]
+        action = y_t * self.action_scale + self.action_bias  # scale action to environment's range
+        log_prob = -0.5 * ((x_t - mean) / std).pow(2) - std.log() - 0.5 * math.log(2 * math.pi)  # gaussian log likelihood
+        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)  # adjustment for Tanh squashing
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return action, log_prob, mean

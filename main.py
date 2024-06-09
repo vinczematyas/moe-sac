@@ -12,7 +12,7 @@ from sac import train_sac, setup_sac
 from utils import init_cfg, fix_seed
 
 
-def save_sac(path, agent):
+def save_agent(path, agent):
     """Save the agent and observations from the replay buffer
 
     Parameters
@@ -31,7 +31,7 @@ def save_sac(path, agent):
     np.savez_compressed(f"{path}/observations.npz", array=agent.rb.observations)
 
 
-def load_sac(agent, path):
+def load_agent(agent, path):
     """Load the agent and observations from the replay buffer
 
     Parameters
@@ -58,7 +58,7 @@ def load_sac(agent, path):
     return agent, obs
 
 
-def eval_agent(cfg, agent, envs, tree=None, n_eval_episodes=10):
+def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10):
     """Evaluate the agent
 
     Parameters
@@ -82,7 +82,6 @@ def eval_agent(cfg, agent, envs, tree=None, n_eval_episodes=10):
 
     obs, _ = envs.reset()
     episode_rewards = []
-    agent.eval()
 
     with torch.no_grad():
         while len(episode_rewards) < n_eval_episodes:
@@ -99,7 +98,10 @@ def eval_agent(cfg, agent, envs, tree=None, n_eval_episodes=10):
                 actions = agent.actor.get_action(obs, mean, log_std, training=False)
             else:
                 actions = agent.actor.get_action(obs, training=False)
-            actions = actions[0].cpu().detach().numpy()
+            if stochastic:
+                actions = actions[0].cpu().detach().numpy()
+            else:
+                actions = actions[-1].cpu().detach().numpy()
 
             next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
