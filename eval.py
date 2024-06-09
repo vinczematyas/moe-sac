@@ -1,3 +1,4 @@
+import gymnasium as gym
 import argparse
 
 from main import eval_agent, load_agent
