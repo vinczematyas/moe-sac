@@ -19,6 +19,7 @@ envs = gym.vector.SyncVectorEnv(
 )
 
 agent = setup_sac(cfg, envs)
-agent = load_agent(agent, f"{args.path}/models/{args.checkpoint}")
+agent, obs = load_agent(agent, f"{args.path}/models/{args.checkpoint}")
 
-eval_agent(cfg, agent, envs, stochastic=False, n_eval_episodes=args.n_episodes)
+rews = eval_agent(cfg, agent, envs, stochastic=False, n_eval_episodes=args.n_episodes)
+print(f"Mean reward: {rews.mean()}", f"Std reward: {rews.std()}", f"Min reward: {rews.min()}", f"Max reward: {rews.max()}")

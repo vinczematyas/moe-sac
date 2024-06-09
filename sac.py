@@ -66,8 +66,6 @@ class TopkRouter(nn.Module):
         self.importance = torch.zeros(n_experts)
         self.load = torch.zeros(n_experts)
 
-        print(self)
-
     def forward(self, x, training):
         """Forward pass of the Top-k router
 

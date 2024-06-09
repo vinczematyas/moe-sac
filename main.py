@@ -108,6 +108,7 @@ def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10)
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     episode_rewards.append(info["episode"]["r"][0])
+                    print(f"episode {len(episode_rewards)}/{n_eval_episodes} reward: {info['episode']['r'][0]}")
 
             obs = next_obs
 
