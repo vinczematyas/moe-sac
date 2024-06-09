@@ -1,4 +1,5 @@
 import gymnasium as gym
+import numpy as np
 import argparse
 
 from main import eval_agent, load_agent
@@ -22,4 +23,5 @@ agent = setup_sac(cfg, envs)
 agent, obs = load_agent(agent, f"{args.path}/models/{args.checkpoint}")
 
 rews = eval_agent(cfg, agent, envs, stochastic=False, n_eval_episodes=args.n_episodes)
+rews = np.array(rews)
 print(f"Mean reward: {rews.mean()}", f"Std reward: {rews.std()}", f"Min reward: {rews.min()}", f"Max reward: {rews.max()}")
