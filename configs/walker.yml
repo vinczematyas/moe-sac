@@ -15,7 +15,6 @@ sac:
   q_depth: 2
   topk: 1
   policy_lr: 0.0003
-  router_hidden_dims: []
   q_lr: 0.001
   buffer_size: 1_000_000
   gamma: 0.99  # discount factor

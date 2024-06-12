@@ -10,38 +10,10 @@ from typing import List
 import math
 
 
-class MLP(nn.Module):
-    """Simple MLP with ReLU activation"""
-
-    def __init__(self, input_dim: int, hidden_dims: List[int], output_dim: int):
-        """Initialize the MLP
-
-        Parameters
-        ----------
-        input_dim: int
-            The dimension of the input
-        hidden_dims: List[int]
-            The dimensions of the hidden layers
-        output_dim: int
-            The dimension of the output
-        """
-
-        super(MLP, self).__init__()
-        self.fc_list = nn.ModuleList(
-            [nn.Linear(in_dim, out_dim) for in_dim, out_dim in zip([input_dim] + hidden_dims, hidden_dims + [output_dim])]
-        )
-
-    def forward(self, x):
-        for fc in self.fc_list[:-1]:
-            x = F.relu(fc(x))
-        x = self.fc_list[-1](x)
-        return x
-
-
 class TopkRouter(nn.Module):
     """Top-k router for Sparse-MoE"""
 
-    def __init__(self, input_dim: int, n_experts: int, topk: int = 1, router_hidden_dims: List[int] = []):
+    def __init__(self, input_dim: int, n_experts: int, topk: int = 1):
         """Initialize the Top-k router
 
         Parameters
@@ -52,8 +24,6 @@ class TopkRouter(nn.Module):
             The number of experts
         topk: int
             The number of experts to select
-        router_hidden_dims: List[int]
-            The dimensions of the hidden layers
         """
 
         super(TopkRouter, self).__init__()
@@ -116,7 +86,6 @@ class Actor(nn.Module):
             input_dim=self.observation_shape, 
             n_experts=self.cfg.n_experts, 
             topk=self.cfg.topk, 
-            router_hidden_dims=cfg.sac.router_hidden_dims,
         )
 
         # action scaling and bias
@@ -296,13 +265,13 @@ def train_sac(cfg, sac):
 
     # pruning
     if sac.counter['n_steps'] > cfg.sac.prune_start and sac.counter['n_steps'] < cfg.sac.prune_end:
-        prune_amout = cfg.sac.prune_percent * (1 - (1 - (sac.counter['n_steps'] - cfg.sac.prune_start) / (cfg.sac.prune_end - cfg.sac.prune_start)) ** 3)
+        prune_amount = cfg.sac.prune_percent * (1 - (1 - (sac.counter['n_steps'] - cfg.sac.prune_start) / (cfg.sac.prune_end - cfg.sac.prune_start)) ** 3)
     elif sac.counter['n_steps'] >= cfg.sac.prune_end:
-        prune_amout = cfg.sac.prune_percent
+        prune_amount = cfg.sac.prune_percent
     else:
-        prune_amout = 0
+        prune_amount = 0.0
 
-    prune.ln_structured(sac.actor.gate.fc, 'weight', amount=prune_amout, n=1, dim=0)
+    prune.ln_structured(sac.actor.gate.fc, 'weight', amount=prune_amount, n=1, dim=-1)
 
     sac.counter['n_steps']  += 1
 

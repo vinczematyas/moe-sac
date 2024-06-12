@@ -261,8 +261,6 @@ if __name__ == "__main__":
     # sac args
     parser.add_argument("--n_experts", type=int)
     parser.add_argument("--topk", type=int)
-    parser.add_argument("--q_depth", type=int)
-    parser.add_argument("--router_hidden_dims", default=[], nargs="+", type=int)
     args = parser.parse_args()
 
     cfg = init_cfg(f"configs/{args.config}")
