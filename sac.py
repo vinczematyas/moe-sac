@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.utils.prune as prune
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
@@ -58,7 +59,7 @@ class TopkRouter(nn.Module):
         super(TopkRouter, self).__init__()
         self.n_experts = n_experts
         self.topk = topk
-        self.fc = MLP(input_dim, router_hidden_dims, n_experts)
+        self.fc = nn.Linear(input_dim, n_experts)
         self.noise = torch.distributions.Normal(
             loc=torch.tensor([0.0]*n_experts), scale=torch.tensor([1.0/n_experts]*n_experts)
         )
@@ -292,6 +293,16 @@ def train_sac(cfg, sac):
             target_param.data.copy_(cfg.sac.tau * param.data + (1 - cfg.sac.tau) * target_param.data)
         for param, target_param in zip(sac.qf2.parameters(), sac.qf2_target.parameters()):
             target_param.data.copy_(cfg.sac.tau * param.data + (1 - cfg.sac.tau) * target_param.data)
+
+    # pruning
+    if sac.counter['n_steps'] > cfg.sac.prune_start and sac.counter['n_steps'] < cfg.sac.prune_end:
+        prune_amout = cfg.sac.prune_percent * (1 - (1 - (sac.counter['n_steps'] - cfg.sac.prune_start) / (cfg.sac.prune_end - cfg.sac.prune_start)) ** 3)
+    elif sac.counter['n_steps'] >= cfg.sac.prune_end:
+        prune_amout = cfg.sac.prune_percent
+    else:
+        prune_amout = 0
+
+    prune.ln_structured(sac.actor.gate.fc, 'weight', amount=prune_amout, n=1, dim=0)
 
     sac.counter['n_steps']  += 1
 

@@ -58,7 +58,7 @@ def load_agent(agent, path):
     return agent, obs
 
 
-def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10):
+def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10, feature_subset=None):
     """Evaluate the agent
 
     Parameters
@@ -87,8 +87,12 @@ def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10)
         while len(episode_rewards) < n_eval_episodes:
             obs = torch.Tensor(obs).to(cfg.device)
             if tree:
+                if feature_subset:
+                    obs_tree = obs[:, feature_subset]
+                else:
+                    obs_tree = obs
                 # infer tree to get expert idx
-                leaf_idxs = int(tree.predict(obs)[0])
+                leaf_idxs = int(tree.predict(obs_tree)[0])
                 mean_expert, log_std_expert = agent.actor.mean_experts[leaf_idxs], agent.actor.log_std_experts[leaf_idxs]
                 # infer the expert to get mean and log_std
                 mean, log_std = mean_expert(obs), log_std_expert(obs)
@@ -209,11 +213,11 @@ def create_routing_dataset(agent, obs, n_samples, tree=None):
         curr_obs = obs[obs_data.shape[0]:obs_data.shape[0]+curr_n_samples]
         curr_obs = torch.Tensor(curr_obs)
         if tree:
-            leaf_idxs = torch.Tensor(tree.predict(curr_obs))
+            expert_idxs = torch.Tensor(tree.predict(curr_obs))
         else:
-            leaf_idxs = agent.actor.gate(curr_obs, training=False)[1]
+            expert_idxs = agent.actor.gate(curr_obs, training=False)[1]
         obs_data = torch.cat((obs_data, curr_obs), dim=0)
-        idx_data = torch.cat((idx_data, leaf_idxs), dim=0)
+        idx_data = torch.cat((idx_data, expert_idxs), dim=0)
     return obs_data, idx_data
 
 
@@ -246,7 +250,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # run args
     parser.add_argument("--run_name", type=str, required=True)
-    parser.add_argument("--config", type=str, default="hopper.yml")
+    parser.add_argument("--config", type=str, default="walker.yml")
     parser.add_argument("--device", type=str)
     parser.add_argument("--total_timesteps", type=int)
     parser.add_argument("--seed", type=int)

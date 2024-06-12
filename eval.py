@@ -16,7 +16,14 @@ args = parser.parse_args()
 cfg = init_cfg(f"{args.path}/config.yml")
 
 envs = gym.vector.SyncVectorEnv(
-    [lambda: gym.wrappers.RecordEpisodeStatistics(gym.make(cfg.env_id,)) for _ in range(1)]
+    [lambda: gym.wrappers.RecordEpisodeStatistics(
+        gym.wrappers.RecordVideo(
+            gym.make(cfg.env_id, render_mode="rgb_array"), 
+            video_folder=args.path,
+            name_prefix="eval",
+            episode_trigger=lambda x: x == 0,
+        )
+    ) for _ in range(1)]
 )
 
 agent = setup_sac(cfg, envs)
