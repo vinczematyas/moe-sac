@@ -181,7 +181,7 @@ def train_sac_agent(cfg, agent, envs):
         train_sac(cfg, agent)
 
         if cfg.log.save_models and (global_step+1) % int(1e5) == 0:
-            save_sac(f"{cfg.run_path}/models/checkpoint_{str(global_step+1)[:-3]}k", agent)
+            save_agent(f"{cfg.run_path}/models/checkpoint_{str(global_step+1)[:-3]}k", agent)
 
 
 def create_routing_dataset(agent, obs, n_samples, tree=None):
@@ -241,7 +241,7 @@ def main(cfg):
     train_sac_agent(cfg, agent, envs)
 
     if cfg.log.save_models:
-        save_sac(f"{cfg.run_path}/models/checkpoint_final", agent)
+        save_agent(f"{cfg.run_path}/models/checkpoint_final", agent)
 
 
 if __name__ == "__main__":
