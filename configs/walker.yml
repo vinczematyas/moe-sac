@@ -24,7 +24,7 @@ sac:
   target_network_frequency: 1
   alpha: 0.2  # temperature determining the relative importance of the entropy term against the reward
   alpha_auto: True
-  prune_start: 0.2
+  prune_start: 0.4
   prune_end: 0.8
   prune_percent: 0.9
 

@@ -6,4 +6,4 @@ wandb/
 __pycache__/
 configs/__pycache__/
 .ipynb_checkpoints/
-
+*.mp4
