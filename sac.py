@@ -264,9 +264,11 @@ def train_sac(cfg, sac):
             target_param.data.copy_(cfg.sac.tau * param.data + (1 - cfg.sac.tau) * target_param.data)
 
     # pruning
-    if sac.counter['n_steps'] > cfg.sac.prune_start and sac.counter['n_steps'] < cfg.sac.prune_end:
-        prune_amount = cfg.sac.prune_percent * (1 - (1 - (sac.counter['n_steps'] - cfg.sac.prune_start) / (cfg.sac.prune_end - cfg.sac.prune_start)) ** 3)
-    elif sac.counter['n_steps'] >= cfg.sac.prune_end:
+    prune_end = cfg.sac.prune_end * cfg.total_timesteps
+    prune_start = cfg.sac.prune_start * cfg.total_timesteps
+    if sac.counter['n_steps'] > prune_start and sac.counter['n_steps'] < prune_end:
+        prune_amount = cfg.sac.prune_percent * (1 - (1 - (sac.counter['n_steps'] - prune_start) / (prune_end - prune_start)) ** 3)
+    elif sac.counter['n_steps'] >= prune_end:
         prune_amount = cfg.sac.prune_percent
     else:
         prune_amount = 0.0
