@@ -274,6 +274,7 @@ def train_sac(cfg, sac):
         prune_amount = 0.0
 
     prune.ln_structured(sac.actor.gate.fc, 'weight', amount=prune_amount, n=1, dim=-1)
+    prune.remove(agent.actor.gate.fc, 'weight')
 
     sac.counter['n_steps']  += 1
 
