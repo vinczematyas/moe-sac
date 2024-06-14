@@ -29,6 +29,7 @@ def save_agent(path, agent):
     save_model(agent.qf1_target, f"{path}/qf1_target.safetensors")
     save_model(agent.qf2_target, f"{path}/qf2_target.safetensors")
     np.savez_compressed(f"{path}/observations.npz", array=agent.rb.observations)
+    np.savez_compressed(f"{path}/rewards.npz", array=agent.rb.rewards)
 
 
 def load_agent(agent, path):
@@ -54,8 +55,9 @@ def load_agent(agent, path):
     load_model(agent.qf2, f"{path}/qf2.safetensors")
     load_model(agent.qf1_target, f"{path}/qf1_target.safetensors")
     load_model(agent.qf2_target, f"{path}/qf2_target.safetensors")
-    obs = np.load(f"{path}/observations.npz")["array"]  
-    return agent, obs
+    obs = np.load(f"{path}/observations.npz")["array"]
+    rews = np.load(f"{path}/rewards.npz")["array"]
+    return agent, obs, rews
 
 
 def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10, feature_subset=None):
