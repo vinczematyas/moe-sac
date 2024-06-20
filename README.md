@@ -14,6 +14,15 @@ conda activate moe-sac
 export PYTHONPATH=`pwd`
 ```
 
-## Run Experiments
+## Evaluate Policy
 
-TODO
+```
+python evaluation.py --path="runs/gecco" --checkpoint="checkpoint_final" --n_episodes=100
+```
+
+## Training New Policy
+
+```
+python main.py --log_local --save_models --wandb --run_name=<RUN_NAME> --seed=<SEED>
+```
+
