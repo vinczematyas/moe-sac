@@ -137,9 +137,8 @@ class Actor(nn.Module):
         log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)
         return mean, log_std
 
-    def get_action(self, x, mean=None, log_std=None, training=False):
-        if mean == None and log_std == None:
-            mean, log_std = self(x, training)
+    def get_action(self, x, training=False):
+        mean, log_std = self(x, training)
         std = log_std.exp()
         x_t = torch.randn_like(mean) * std + mean
         y_t = torch.tanh(x_t)  # normalize action to [-1, 1]

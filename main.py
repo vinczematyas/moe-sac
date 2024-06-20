@@ -60,7 +60,7 @@ def load_agent(agent, path):
     return agent, obs, rews
 
 
-def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10, feature_subset=None):
+def eval_agent(cfg, agent, envs, stochastic=True, n_eval_episodes=10):
     """Evaluate the agent
 
     Parameters
@@ -84,30 +84,17 @@ def eval_agent(cfg, agent, envs, stochastic=True, tree=None, n_eval_episodes=10,
 
     obs, _ = envs.reset()
     episode_rewards = []
+    expert_idxs = []
 
     with torch.no_grad():
         while len(episode_rewards) < n_eval_episodes:
             obs = torch.Tensor(obs).to(cfg.device)
-            if tree:
-                if feature_subset:
-                    obs_tree = obs[:, feature_subset]
-                else:
-                    obs_tree = obs
-                # infer tree to get expert idx
-                leaf_idxs = int(tree.predict(obs_tree)[0])
-                mean_expert, log_std_expert = agent.actor.mean_experts[leaf_idxs], agent.actor.log_std_experts[leaf_idxs]
-                # infer the expert to get mean and log_std
-                mean, log_std = mean_expert(obs), log_std_expert(obs)
-                log_std = torch.tanh(log_std)
-                log_std = agent.actor.LOG_STD_MIN + 0.5 * (agent.actor.LOG_STD_MAX - agent.actor.LOG_STD_MIN) * (log_std + 1)
-                # get action using mean and log_std
-                actions = agent.actor.get_action(obs, mean, log_std, training=False)
-            else:
-                actions = agent.actor.get_action(obs, training=False)
+            action, log_prob, mean, expert_idx = agent.actor.get_action(obs, training=False, return_expert_idx=True)
+
             if stochastic:
-                actions = actions[0].cpu().detach().numpy()
+                actions = action.cpu().detach().numpy()
             else:
-                actions = actions[-1].cpu().detach().numpy()
+                actions = mean.cpu().detach().numpy()
 
             next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
