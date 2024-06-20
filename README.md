@@ -9,8 +9,8 @@ This repository contains the code for the paper "Mixture of Interpretable Expert
 The code is tested on CPU only.
 
 ```
-conda env create -f environment.yml --name moe-sac
-conda activate moe-sac
+conda env create -f environment.yml --name ic38
+conda activate ic38
 export PYTHONPATH=`pwd`
 ```
 
