@@ -1,0 +1,26 @@
+device: cpu
+env_id: Walker2d-v4
+log:
+  log_local: true
+  save_models: true
+  wandb: false
+run_path: runs/walker/gecco_seed_3_0618_0941
+sac:
+  alpha: 0.2
+  alpha_auto: true
+  batch_size: 256
+  buffer_size: 1000000
+  gamma: 0.99
+  n_experts: 6
+  policy_frequency: 2
+  policy_lr: 0.0003
+  prune_end: 0.8
+  prune_percent: 0.9
+  prune_start: 0.2
+  q_depth: 2
+  q_lr: 0.001
+  target_network_frequency: 1
+  tau: 0.005
+  topk: 1
+seed: 3
+total_timesteps: 1000000
